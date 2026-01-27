@@ -1,0 +1,17 @@
+{
+  "name": "prediction-market-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "main": "server.js",
+  "scripts": {
+    "dev": "node server.js",
+    "start": "NODE_ENV=production node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.1",
+    "mongoose": "^7.7.0",
+    "morgan": "^1.10.0"
+  }
+}

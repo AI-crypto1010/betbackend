@@ -1,37 +1,79 @@
-const { v4: uuidv4 } = require("uuid");
-const { readDb, writeDb, seedDb } = require("./db");
+const Market = require("./Market");
 
 const toNumber = (val, fallback = 0) => {
   const num = Number(val);
   return Number.isFinite(num) ? num : fallback;
 };
 
-seedDb();
+const seedMarkets = async () => {
+  const count = await Market.estimatedDocumentCount();
+  if (count > 0) return;
 
-const listMarkets = ({ page = 1, limit = 10, marketStatus, marketField }) => {
-  const db = readDb();
-  let markets = db.markets || [];
+  const now = new Date();
+  const inFiveDays = new Date(now.getTime() + 5 * 24 * 60 * 60 * 1000);
+  const inTenDays = new Date(now.getTime() + 10 * 24 * 60 * 60 * 1000);
 
-  if (marketStatus) {
-    markets = markets.filter((m) => m.marketStatus === marketStatus);
-  }
-  if (marketField !== undefined) {
-    markets = markets.filter((m) => Number(m.marketField) === Number(marketField));
-  }
+  const seedData = [
+    {
+      marketField: 0,
+      apiType: 0,
+      question: "Will Bitcoin reach $120k before year end?",
+      feedName: "bitcoin",
+      value: 120000,
+      totalInvestment: 20.5,
+      playerACount: 120,
+      playerBCount: 80,
+      dataLink: "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd",
+      marketStatus: "ACTIVE",
+      date: inFiveDays,
+    },
+    {
+      marketField: 0,
+      apiType: 0,
+      question: "Will Ethereum break $5,000 this quarter?",
+      feedName: "ethereum",
+      value: 5000,
+      totalInvestment: 14.2,
+      playerACount: 90,
+      playerBCount: 60,
+      dataLink: "https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd",
+      marketStatus: "ACTIVE",
+      date: inTenDays,
+    },
+    {
+      marketField: 1,
+      apiType: 0,
+      question: "Will the Lakers score 120+ in their next game?",
+      feedName: "Lakers",
+      value: 120,
+      marketStatus: "PENDING",
+      date: inTenDays,
+      dataLink: "https://api.sportsdata.io/v3/nba/stats/json/PlayerGameStatsByDate/2024-10-10/LAL",
+    },
+  ];
 
-  markets = markets.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  await Market.insertMany(seedData);
+};
 
-  const total = markets.length;
-  const start = (page - 1) * limit;
-  const data = markets.slice(start, start + limit);
+const listMarkets = async ({ page = 1, limit = 10, marketStatus, marketField }) => {
+  const query = {};
+  if (marketStatus) query.marketStatus = marketStatus;
+  if (marketField !== undefined) query.marketField = Number(marketField);
+
+  const [data, total] = await Promise.all([
+    Market.find(query)
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .lean(),
+    Market.countDocuments(query),
+  ]);
 
   return { data, total, page, limit };
 };
 
-const createMarket = (payload) => {
-  const now = new Date().toISOString();
-  const newMarket = {
-    _id: uuidv4(),
+const createMarket = async (payload) => {
+  const market = await Market.create({
     marketField: Number(payload.marketField) || 0,
     apiType: Number(payload.apiType) || 0,
     task: payload.task,
@@ -46,7 +88,6 @@ const createMarket = (payload) => {
     date: payload.date,
     marketStatus: "INIT",
     imageUrl: payload.imageUrl || "https://placehold.co/96x96",
-    createdAt: now,
     playerACount: 0,
     playerBCount: 0,
     totalInvestment: 0,
@@ -61,41 +102,30 @@ const createMarket = (payload) => {
     initAmount: 0,
     investors: [],
     bets: [],
-  };
+  });
 
-  const db = readDb();
-  db.markets = db.markets || [];
-  db.markets.push(newMarket);
-  writeDb(db);
-  return newMarket;
+  return market.toObject();
 };
 
-const findMarketIndex = (db, id) => db.markets.findIndex((m) => m._id === id);
+const updateMarketOnChainData = async (payload) => {
+  const market = await Market.findById(payload.id);
+  if (!market) return null;
 
-const updateMarketOnChainData = (payload) => {
-  const db = readDb();
-  const marketIndex = findMarketIndex(db, payload.id);
-  if (marketIndex === -1) return null;
-
-  const market = db.markets[marketIndex];
   market.tokenA = payload.tokenA ? String(payload.tokenA) : market.tokenA;
   market.tokenB = payload.tokenB ? String(payload.tokenB) : market.tokenB;
   market.market = payload.market ? String(payload.market) : market.market;
   market.feedAddress = payload.feedAddress ? String(payload.feedAddress) : market.feedAddress;
   market.marketStatus = "PENDING";
-  market.updatedAt = new Date().toISOString();
+  market.updatedAt = new Date();
 
-  db.markets[marketIndex] = market;
-  writeDb(db);
-  return market;
+  await market.save();
+  return market.toObject();
 };
 
-const addLiquidity = ({ marketId, amount, investor, active }) => {
-  const db = readDb();
-  const marketIndex = findMarketIndex(db, marketId);
-  if (marketIndex === -1) return null;
+const addLiquidity = async ({ marketId, amount, investor, active }) => {
+  const market = await Market.findById(marketId);
+  if (!market) return null;
 
-  const market = db.markets[marketIndex];
   const amt = toNumber(amount, 0);
   market.totalInvestment = toNumber(market.totalInvestment, 0) + amt;
   market.initAmount = market.initAmount || 0;
@@ -107,19 +137,16 @@ const addLiquidity = ({ marketId, amount, investor, active }) => {
   if (active) {
     market.marketStatus = "ACTIVE";
   }
-  market.updatedAt = new Date().toISOString();
+  market.updatedAt = new Date();
 
-  db.markets[marketIndex] = market;
-  writeDb(db);
-  return market;
+  await market.save();
+  return market.toObject();
 };
 
-const addBet = ({ marketId, amount, isYes, player }) => {
-  const db = readDb();
-  const marketIndex = findMarketIndex(db, marketId);
-  if (marketIndex === -1) return null;
+const addBet = async ({ marketId, amount, isYes, player }) => {
+  const market = await Market.findById(marketId);
+  if (!market) return null;
 
-  const market = db.markets[marketIndex];
   const amt = toNumber(amount, 0);
   market.totalInvestment = toNumber(market.totalInvestment, 0) + amt;
   market.playerACount = toNumber(market.playerACount, 0) + (isYes ? amt : 0);
@@ -130,11 +157,10 @@ const addBet = ({ marketId, amount, isYes, player }) => {
   if (player) {
     market.bets.push({ player, amount: amt, isYes: !!isYes, ts: new Date().toISOString() });
   }
-  market.updatedAt = new Date().toISOString();
+  market.updatedAt = new Date();
 
-  db.markets[marketIndex] = market;
-  writeDb(db);
-  return market;
+  await market.save();
+  return market.toObject();
 };
 
 module.exports = {
@@ -143,4 +169,5 @@ module.exports = {
   updateMarketOnChainData,
   addLiquidity,
   addBet,
+  seedMarkets,
 };
